@@ -220,7 +220,7 @@ When the quota resets, it dances to celebrate. Without quota data (API key), the
 - Its window **never takes focus** — your typing always goes to your app
 - Keep working near it and it walks away to give you room
 - **Full click-through** mode: Clawd ignores the mouse entirely
-- **Light on battery:** 60 fps only while moving, 20 fps standing still, 12 fps asleep, capped at 30 fps on battery or in **Power saving**. Measured on an M-series MacBook: about 24% CPU roaming, 14% standing still; zero while hidden or while the screen is locked
+- **Light on battery:** 60 fps only while moving, 12 fps standing still or asleep, capped at 30 fps on battery or in **Power saving**. Measured on an M-series MacBook: about 24% CPU roaming; zero while hidden or while the screen is locked
 
 <details>
 <summary><b>Full menu reference</b></summary>
