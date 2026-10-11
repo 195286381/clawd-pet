@@ -156,7 +156,7 @@ Claude 要用工具、需要你批准，而那个会话的窗口不在最前面�
 
 ### 连接是怎么做的
 
-连接时 Clawd 会在 `~/.claude/settings.json` 里加几条 hooks：只追加自己的，原文件备份为 `settings.json.clawd-backup`，取消勾选就删掉这几条。除了批准权限要等你点按钮，其他 hooks 都在后台执行（`async`），不会拖慢 Claude Code：用 `curl` 把事件发到 `127.0.0.1:47615`，Clawd 没开着时立刻静默结束。每种提醒都能在同一个菜单里单独关掉。从旧版升级的，Clawd 启动时会自动补齐新增的 hooks。
+连接时 Clawd 会在 `~/.claude/settings.json` 里加几条 hooks：只追加自己的，原文件备份为 `settings.json.clawd-backup`，取消勾选就删掉这几条。除了批准权限要等你点按钮，其他 hooks 都在后台执行（`async`），不会拖慢 Claude Code：用 `curl` 把事件发到 `127.0.0.1:47615`，Clawd 没开着时立刻静默结束。hooks 只在 Claude Code（终端里或 Claude App 里）中生效，其他读同一份 `settings.json` 的兼容 CLI 不会触发。每种提醒都能在同一个菜单里单独关掉。从旧版升级的，Clawd 启动时会自动补齐新增的 hooks。
 
 **实时额度**（**Claude Code → 实时额度(经由状态栏)**，默认关）会把 Claude Code 的状态栏命令包一层：每次刷新时先在后台把会话数据 `curl` 给 Clawd，再原样交给你原来的状态栏命令，显示不变。这样 Clawd 每次回复都能拿到额度和每个会话的上下文用量，不用再每 5 分钟跑一次 `claude -p "/usage"`。关掉就换回你原来的状态栏。如果你原来没有设置状态栏，打开期间 Claude Code 底部的一些按键提示（比如 esc to interrupt）会不显示。
 

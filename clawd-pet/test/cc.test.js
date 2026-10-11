@@ -3,8 +3,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const cc = require('../cc');
 
-const CMD = `curl ... -H "X-Clawd-Host: $CLAUDE_CODE_HOST_SESSION_ID" http://127.0.0.1:47615/hook # ${cc.HOOK_MARK}`;
+const CMD = `[ "$CLAUDECODE" = 1 ] && curl ... -H "X-Clawd-Host: $CLAUDE_CODE_HOST_SESSION_ID" http://127.0.0.1:47615/hook # ${cc.HOOK_MARK}`;
 const OLD_CMD = `curl ... http://127.0.0.1:47615/hook # ${cc.HOOK_MARK}`;
+const NO_CC_CMD = `curl ... -H "X-Clawd-Host: $CLAUDE_CODE_HOST_SESSION_ID" http://127.0.0.1:47615/hook # ${cc.HOOK_MARK}`;   // 不限定 Claude Code 的旧版
 const other = { type: 'command', command: 'say done' };
 
 test('editHooks:装上 Clawd 的 hook,别的 hooks 和配置原样保留', () => {
@@ -48,6 +49,7 @@ test('认出装了哪些、旧版命令、批准权限', () => {
   assert.equal(cc.hasClawdHook(hooks, 'PreToolUse'), false);
   assert.deepEqual(cc.clawdHookEvents(undefined), []);
   assert.equal(cc.clawdHooksStale(null), false);
+  assert.equal(cc.clawdHooksStale({ Stop: [{ hooks: [{ command: NO_CC_CMD }] }] }), true);
   assert.equal(cc.hasClawdHook(undefined, 'Stop'), false);
   assert.equal(cc.isClawdHook({ command: 42 }), false);
 });
