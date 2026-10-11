@@ -404,11 +404,13 @@ ipcMain.on('drop-display', () => {
   if (d.id !== curDisplay().id) moveToDisplay(d, p);
 });
 // ---------- 用量:每 30 秒增量扫描一次 Claude Code 的本地会话记录 ----------
+// 分段扫(见 usage.js 的 scanAsync),第一次读几百 MB 记录时主进程也不卡
 const tracker = new UsageTracker();
-function pushUsage() {
+async function pushUsage() {
   if (!win || win.isDestroyed()) return;
   try {
-    tracker.scan();
+    await tracker.scanAsync();
+    if (!win || win.isDestroyed()) return;
     const sum = tracker.summary();
     sum.report = reports();
     // 开发自测:CLAWD_FAKE_QUOTA=7 npm start —— 假装 5 小时额度只剩 7%(只在未打包时生效)
@@ -458,6 +460,7 @@ ipcMain.on('request-usage', () => { pushUsage(); refreshLimits(); });
 setInterval(pushUsage, 30000);
 setInterval(() => refreshLimits(true), 5 * 60000);
 
+let locked = false;   // 锁屏中
 const send = (cmd) => { if (win && !win.isDestroyed()) win.webContents.send('cmd', cmd); };
 
 function createWindow() {
@@ -520,7 +523,7 @@ function createWindow() {
   // 光标在动时每 16ms 查一次、动了就发;停下 1 秒后放慢到每 100ms 查一次(渲染进程靠这个判断"在身上停够了")
   let lastCur = '', lastMove = 0, timer = 0;
   const poll = () => {
-    if (win && !win.isDestroyed() && !hidden) {
+    if (win && !win.isDestroyed() && !hidden && !locked) {
       const p = screen.getCursorScreenPoint();
       const b = win.getBounds();
       const x = p.x - b.x, y = p.y - b.y, key = x + ',' + y, now = Date.now();
@@ -726,6 +729,9 @@ app.whenReady().then(() => {
   // 插拔电源:用电池时渲染进程把帧率上限降到 30
   powerMonitor.on('on-battery', () => send('power:battery'));
   powerMonitor.on('on-ac', () => send('power:ac'));
+  // 锁屏时谁也看不见 Clawd:停掉渲染和光标轮询,解锁再接着来(开着 caffeinate 跑长任务时,锁屏后能省下一整晚的绘制)
+  powerMonitor.on('lock-screen', () => { locked = true; send('screen:off'); });
+  powerMonitor.on('unlock-screen', () => { locked = false; send('screen:on'); });
 
   // 你离开电脑(5 分钟没碰键盘鼠标):Clawd 去睡觉;一回来就醒,告诉你这期间 Claude 那边发生了什么
   const AWAY_AFTER = (!app.isPackaged && Number(process.env.CLAWD_AWAY_AFTER)) || 300;   // 秒;开发自测可以调短

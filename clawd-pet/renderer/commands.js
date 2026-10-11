@@ -11,7 +11,7 @@ import { kbClose, kbKey, kbOpenList } from './crabs.js';
 import { decidePerm, dropPerm, permQueue } from './perm.js';
 import { BREAK_REST, awayLog, showReport, welcomeBack } from './reminders.js';
 import { action, isClinging, pickWalk, setAction, stopCling } from './behavior.js';
-import { startLoop, wake } from './loop.js';
+import { startLoop, stopLoop, wake } from './loop.js';
 
 window.pet?.onCommand(cmd => {
   wake();
@@ -38,6 +38,9 @@ window.pet?.onCommand(cmd => {
     startLoop();
     return;
   }
+  // 锁屏:不画了;解锁接着画(收起着就继续等放出)
+  if (cmd === 'screen:off') { stopLoop(); return; }
+  if (cmd === 'screen:on') { clock.getDelta(); if (!state.paused) startLoop(); return; }
   // 偏好设置:随时生效(拖着它的时候也不能丢)
   if (cmd.startsWith('chat:')) { prefs.chatLevel = cmd.slice(5); return; }
   if (cmd.startsWith('break:')) { prefs.breakMin = Number(cmd.slice(6)) || 0; return; }

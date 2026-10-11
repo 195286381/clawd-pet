@@ -174,39 +174,58 @@ function listJsonl(dir, out = []) {
   return out;
 }
 
+const CHUNK = 4 << 20, EMPTY = Buffer.alloc(0);   // 一次最多读 4MB,读完一段就让出主线程
+
 class UsageTracker {
   constructor() {
-    this.files = new Map();     // 路径 -> { offset, rest }
+    this.files = new Map();     // 路径 -> { offset, rest(还没写完的半行,Buffer) }
     this.entries = [];          // { t, model, inp, out, cw5, cw1, cr, cost }
-    this.seen = new Set();      // 去重:message.id + requestId
+    this.seen = new Map();      // 去重:message.id + requestId -> 时间;过了保留期就删,不然开着几周会一直涨
+    this.running = null;        // 正在进行的 scanAsync
   }
 
   // 增量扫描:每个文件只读上次读到之后的新内容
-  scan() {
-    const cutoff = Date.now() - KEEP;
+  scan() { for (const _ of this.steps()) ; }   // eslint-disable-line no-unused-vars
+
+  // 同样的扫描,但每读完一段(一个文件或 4MB)就让出主线程:
+  // 第一次扫描要读几百 MB 的会话记录,同步读会让主进程卡住一两秒(光标跟随、hooks 接口都停住)。
+  // 同时只跑一次,扫描中再叫它就等这一次扫完再补一次
+  scanAsync() {
+    if (this.running) return (this.again ||= this.running.then(() => { this.again = null; return this.scanAsync(); }));
+    const run = (async () => { for (const _ of this.steps()) await new Promise(r => setImmediate(r)); })();   // eslint-disable-line no-unused-vars
+    return (this.running = run.finally(() => { this.running = null; }));
+  }
+
+  *steps() {
+    const cutoff = Date.now() - KEEP, before = this.entries.length;
     for (const dir of projectDirs()) {
       for (const file of listJsonl(dir)) {
         let st;
         try { st = fs.statSync(file); } catch { continue; }
-        if (st.mtimeMs < cutoff) continue;                 // 一周多没动过的会话直接跳过
+        if (st.mtimeMs < cutoff) { this.files.delete(file); continue; }   // 一周多没动过的会话直接跳过
         let f = this.files.get(file);
-        if (!f || st.size < f.offset) { f = { offset: 0, rest: '' }; this.files.set(file, f); }
-        if (st.size === f.offset) continue;
-        let buf;
-        try {
-          const fd = fs.openSync(file, 'r');
-          buf = Buffer.alloc(st.size - f.offset);
-          fs.readSync(fd, buf, 0, buf.length, f.offset);
-          fs.closeSync(fd);
-        } catch { continue; }
-        f.offset = st.size;
-        const lines = (f.rest + buf.toString('utf8')).split('\n');
-        f.rest = lines.pop();                               // 最后一行可能还没写完
-        for (const line of lines) this.ingest(line, cutoff);
+        if (!f || st.size < f.offset) { f = { offset: 0, rest: EMPTY }; this.files.set(file, f); }
+        while (f.offset < st.size) {
+          let buf;
+          try {
+            const fd = fs.openSync(file, 'r');
+            try { buf = Buffer.alloc(Math.min(CHUNK, st.size - f.offset)); buf = buf.subarray(0, fs.readSync(fd, buf, 0, buf.length, f.offset)); }
+            finally { fs.closeSync(fd); }
+          } catch { break; }
+          if (!buf.length) break;
+          f.offset += buf.length;
+          // 最后一行可能还没写完(或者被 4MB 切断),按字节留到下次再拼:切在多字节汉字中间也不会乱码
+          const data = f.rest.length ? Buffer.concat([f.rest, buf]) : buf, end = data.lastIndexOf(10);
+          f.rest = Buffer.from(data.subarray(end + 1));
+          if (end >= 0) for (const line of data.toString('utf8', 0, end).split('\n')) this.ingest(line, cutoff);
+          yield;
+        }
       }
     }
+    const added = this.entries.length > before;
     this.entries = this.entries.filter(e => e.t >= cutoff);
-    this.entries.sort((a, b) => a.t - b.t);
+    if (added) this.entries.sort((a, b) => a.t - b.t);
+    for (const [k, t] of this.seen) if (t < cutoff) this.seen.delete(k);
   }
 
   ingest(line, cutoff) {
@@ -219,7 +238,7 @@ class UsageTracker {
     const t = Date.parse(d.timestamp);
     if (!(t >= cutoff)) return;
     const key = `${m.id || ''}:${d.requestId || ''}`;
-    if (key !== ':') { if (this.seen.has(key)) return; this.seen.add(key); }
+    if (key !== ':') { if (this.seen.has(key)) return; this.seen.set(key, t); }
 
     const u = m.usage;
     const inp = u.input_tokens || 0, out = u.output_tokens || 0, cr = u.cache_read_input_tokens || 0;
