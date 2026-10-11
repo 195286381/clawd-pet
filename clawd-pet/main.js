@@ -94,11 +94,14 @@ const HOOK_PORT = (!app.isPackaged && Number(process.env.CLAWD_HOOK_PORT)) || 47
 // 顺带告诉 Clawd 这个会话开在哪个 App 里(启动它的 App 的 bundle id)、哪个终端(tty),
 // 以及在 Claude App 里的会话 id,点小螃蟹时好跳过去
 const HOOK_HEADERS = `-H 'Content-Type: application/json' -H "X-Clawd-App: $__CFBundleIdentifier" -H "X-Clawd-Tty: $(ps -o tty= -p $PPID)" -H "X-Clawd-Host: $CLAUDE_CODE_HOST_SESSION_ID"`;
-const HOOK_CMD = `curl -s -m 2 -X POST ${HOOK_HEADERS} --data-binary @- http://127.0.0.1:${HOOK_PORT}/hook >/dev/null 2>&1 || true # ${HOOK_MARK}`;
+// 只认 Claude Code(终端里的和 Claude App 里的都一样):它跑 hook 时会带上 CLAUDECODE=1;
+// 别的兼容 Claude Code 配置的 CLI 也会读 ~/.claude/settings.json 跑这些 hook,没有这个变量就什么也不发
+const CC_ONLY = '[ "$CLAUDECODE" = 1 ] &&';
+const HOOK_CMD = `${CC_ONLY} curl -s -m 2 -X POST ${HOOK_HEADERS} --data-binary @- http://127.0.0.1:${HOOK_PORT}/hook >/dev/null 2>&1 || true # ${HOOK_MARK}`;
 // 在 Clawd 上批准权限:这条 hook 不是后台跑的,Claude Code 会等它的输出(批准 / 拒绝的 JSON)再决定弹不弹批准框。
 // Clawd 没开、没表态或超时都输出空,Claude Code 照常在终端里弹框
 const PERM_WAIT = 60e3;
-const APPROVE_CMD = `curl -s -m 70 -X POST ${HOOK_HEADERS} --data-binary @- http://127.0.0.1:${HOOK_PORT}/permission 2>/dev/null || true # ${HOOK_MARK}`;
+const APPROVE_CMD = `${CC_ONLY} curl -s -m 70 -X POST ${HOOK_HEADERS} --data-binary @- http://127.0.0.1:${HOOK_PORT}/permission 2>/dev/null || true # ${HOOK_MARK}`;
 // 开发自测可以用 CLAWD_CC_SETTINGS 指向一个临时文件,避免动到真正的配置
 const ccSettingsFile = () => (!app.isPackaged && process.env.CLAWD_CC_SETTINGS) || path.join(os.homedir(), '.claude', 'settings.json');
 function readCC() {
@@ -110,7 +113,7 @@ function ccHookEvents() {   // 已经装了 Clawd hook 的事件
   catch { return []; }
 }
 const ccHooked = () => ccHookEvents().length > 0;
-// 旧版 hook 命令不带 App / tty / Claude App 会话 id(点小螃蟹没法跳转),启动时换成新的
+// 旧版 hook 命令不带 App / tty / Claude App 会话 id(点小螃蟹没法跳转)或不限定 Claude Code,启动时换成新的
 function ccHooksStale() {
   try { return cc.clawdHooksStale(readCC().hooks); }
   catch { return false; }
