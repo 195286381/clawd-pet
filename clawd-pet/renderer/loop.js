@@ -12,15 +12,17 @@ let looping = false, loopTimer = 0;   // 主循环状态,见「省电」
 
 // ---------------- 主循环 ----------------
 // ---- 省电:闲着时降帧 ----
-// 走路、跳、被拎着、摸它时满帧;站着发呆 / 贴墙时 20 帧,光标在远处动(眼睛要跟着转)30 帧、
+// 走路、跳、被拎着、摸它时满帧;站着发呆 / 贴墙时 12 帧,光标在远处动(眼睛要跟着转)30 帧、
 // 在它附近动才满帧;睡觉 12 帧。用电池或开了省电模式时上限 30 帧。
+// 开销几乎全在「每秒交几帧给系统合成」上,画什么关系不大(M1 Pro 实测每帧/秒约 0.7% CPU,
+// 关阴影、降像素比都只省 1~3 个点),所以省电只能靠少交帧;呼吸很慢,12 帧看不出区别
 
 export function targetFps() {
   const cap = prefs.onBattery || prefs.powerSave ? 30 : 60;
   if (state.press || state.hovering || st.air || bubbleKind === 'usage' || fx.length || ridersPop.v) return cap;   // 特效在动时满帧
   if (action.type === 'sleep') return 12;
   if (action.type !== 'rest' && action.type !== 'cling') return cap;
-  if (nowSec() - cursor.at > 1.5) return 20;
+  if (nowSec() - cursor.at > 1.5) return 12;
   const near = Math.hypot(cursor.x - (state.canvasLeft + CW / 2), cursor.y - (state.canvasTop + CH / 2)) < CW;
   return near ? cap : Math.min(cap, 30);
 }

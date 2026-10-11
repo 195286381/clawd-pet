@@ -210,6 +210,39 @@ test('scan:从 CLAUDE_CONFIG_DIR 读会话记录,增量读、半行等写完再�
   assert.equal(u.entries.length, 2);
 });
 
+test('scanAsync:大文件按 4MB 分段读,切在行中间(汉字中间)也能拼回来,结果和 scan 一样;过期的去重记录会删掉', async (t) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'clawd-usage-'));
+  const home = os.homedir, oldEnv = process.env.CLAUDE_CONFIG_DIR;
+  t.after(() => {
+    os.homedir = home;
+    if (oldEnv === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = oldEnv;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+  os.homedir = () => path.join(tmp, 'home');
+  process.env.CLAUDE_CONFIG_DIR = path.join(tmp, 'cfg');
+  const dir = path.join(tmp, 'cfg', 'projects', 'p');
+  fs.mkdirSync(dir, { recursive: true });
+  const now = Date.now(), lines = [];
+  // 每行带一段汉字(3 字节),总共 9MB 多:4MB 的切口几乎一定落在某行中间、某个汉字中间
+  for (let i = 0; i < 3000; i++) {
+    const l = JSON.parse(line({ id: 'm' + i, t: now - i * 1000 }));
+    l.message.content = [{ type: 'text', text: '汉'.repeat(1000) }];
+    lines.push(JSON.stringify(l));
+  }
+  fs.writeFileSync(path.join(dir, 's.jsonl'), lines.join('\n') + '\n');
+
+  const a = new UsageTracker(), b = new UsageTracker();
+  a.scan();
+  await Promise.all([b.scanAsync(), b.scanAsync()]);                    // 扫描中再叫一次:排在后面补扫,不会重复计
+  assert.equal(a.entries.length, 3000);
+  assert.deepEqual(b.entries, a.entries);
+
+  b.seen.set('old:x', now - 30 * DAY);
+  await b.scanAsync();
+  assert.equal(b.seen.has('old:x'), false);
+  assert.equal(b.seen.size, 3000);
+});
+
 test('setLiveLimits:状态栏送来的额度直接换上,数字变了才说变了,缺的窗口沿用上次', () => {
   const now = Date.now(), reset = now + 2 * HOUR;
   const five = used => ({ key: 'session', used, remaining: 100 - used, resetsAt: reset, resetText: '' });
