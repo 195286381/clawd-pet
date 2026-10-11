@@ -11,8 +11,8 @@ const isClawdHook = h => typeof h.command === 'string' && h.command.includes(HOO
 const hasClawdHook = (hooks, ev) => ((hooks || {})[ev] || []).some(g => (g.hooks || []).some(isClawdHook));
 // 已经装了 Clawd hook 的事件
 const clawdHookEvents = hooks => HOOK_EVENTS.filter(ev => hasClawdHook(hooks, ev));
-// 旧版 hook 命令不带 App / tty / Claude App 会话 id(点小螃蟹没法跳转),或者不限定 Claude Code(别的兼容 CLI 也会触发)
-const clawdHooksStale = hooks => HOOK_EVENTS.some(ev => ((hooks || {})[ev] || []).some(g => (g.hooks || []).some(x => isClawdHook(x) && !(x.command.includes('X-Clawd-Host') && x.command.includes('$CLAUDECODE')))));
+// 有 Clawd hook 的命令和现在的 cmd 不一样(旧版命令、换了端口或脚本位置),要换成新的
+const clawdHooksStale = (hooks, cmd, events = HOOK_EVENTS) => events.some(ev => ((hooks || {})[ev] || []).some(g => (g.hooks || []).some(x => isClawdHook(x) && x.command !== cmd)));
 // 只增删 Clawd 自己的那几条,别的 hooks 原样保留。mutate 拿到 set(ev, hook),hook 为 null 时只删掉 Clawd 的。改的是传进来的 cfg
 function editHooks(cfg, mutate) {
   const hooks = cfg.hooks || {};
