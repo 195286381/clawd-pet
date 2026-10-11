@@ -91,17 +91,28 @@ function setPref(key, v) {
 // 出错停下 / 需要确认 / 压缩上下文 / 派出和收回子助手 / 会话结束)用 curl 把事件发过来。hooks 都是 async(后台跑),不拖慢 Claude Code;
 // Clawd 没开着时 curl 静默失败,也不影响。
 const HOOK_PORT = (!app.isPackaged && Number(process.env.CLAWD_HOOK_PORT)) || 47615;   // 开发自测可换端口,避免和正在运行的 Clawd 冲突
-// 顺带告诉 Clawd 这个会话开在哪个 App 里(启动它的 App 的 bundle id)、哪个终端(tty),
-// 以及在 Claude App 里的会话 id,点小螃蟹时好跳过去
-const HOOK_HEADERS = `-H 'Content-Type: application/json' -H "X-Clawd-App: $__CFBundleIdentifier" -H "X-Clawd-Tty: $(ps -o tty= -p $PPID)" -H "X-Clawd-Host: $CLAUDE_CODE_HOST_SESSION_ID"`;
-// 只认 Claude Code(终端里的和 Claude App 里的都一样):它跑 hook 时会带上 CLAUDECODE=1;
-// 别的兼容 Claude Code 配置的 CLI 也会读 ~/.claude/settings.json 跑这些 hook,没有这个变量就什么也不发
-const CC_ONLY = '[ "$CLAUDECODE" = 1 ] &&';
-const HOOK_CMD = `${CC_ONLY} curl -s -m 2 -X POST ${HOOK_HEADERS} --data-binary @- http://127.0.0.1:${HOOK_PORT}/hook >/dev/null 2>&1 || true # ${HOOK_MARK}`;
+// 真正发事件的是 userData/hook.sh(每次启动重写),hook 命令里只调用它。
+// 别的兼容 Claude Code 配置的 CLI(如 Grok)也会读 ~/.claude/settings.json 跑这些 hook,而且会先自己展开命令里的 $变量,
+// 有没设置的就报错不执行;所以命令里不能出现 $,用到的变量都放进脚本里
+const HOOK_SCRIPT = `#!/bin/sh
+# Clawd 的 Claude Code hook,把 hook 的 JSON(stdin)转发给本机的 Clawd。Clawd 每次启动时重写这个文件
+# 用法:hook.sh hook|permission 端口
+# 只认 Claude Code(终端里的和 Claude App 里的都一样):它跑 hook 时会带上 CLAUDECODE=1,别的 CLI 没有就什么也不发
+[ "$CLAUDECODE" = 1 ] || exit 0
+if [ "$1" = permission ]; then max=70; else max=2; fi
+# 顺带告诉 Clawd 这个会话开在哪个 App 里(启动它的 App 的 bundle id)、哪个终端(tty),
+# 以及在 Claude App 里的会话 id,点小螃蟹时好跳过去。Claude Code 用 sh -c 跑 hook 命令,这里的父进程是那层 sh(没有终端),再往上一层才是 Claude Code
+cc=$(ps -o ppid= -p $PPID)
+exec curl -s -m $max -X POST -H 'Content-Type: application/json' -H "X-Clawd-App: $__CFBundleIdentifier" -H "X-Clawd-Tty: $(ps -o tty= -p $cc)" -H "X-Clawd-Host: $CLAUDE_CODE_HOST_SESSION_ID" --data-binary @- "http://127.0.0.1:$2/$1"
+`;
+const hookScriptFile = () => path.join(app.getPath('userData'), 'hook.sh');
+const hookCall = kind => `sh '${hookScriptFile().replace(/'/g, `'\\''`)}' ${kind} ${HOOK_PORT}`;
+// 脚本不在了(比如删掉了 Clawd)也静默失败
+const HOOK_CMD = `${hookCall('hook')} >/dev/null 2>&1 || true # ${HOOK_MARK}`;
 // 在 Clawd 上批准权限:这条 hook 不是后台跑的,Claude Code 会等它的输出(批准 / 拒绝的 JSON)再决定弹不弹批准框。
 // Clawd 没开、没表态或超时都输出空,Claude Code 照常在终端里弹框
 const PERM_WAIT = 60e3;
-const APPROVE_CMD = `${CC_ONLY} curl -s -m 70 -X POST ${HOOK_HEADERS} --data-binary @- http://127.0.0.1:${HOOK_PORT}/permission 2>/dev/null || true # ${HOOK_MARK}`;
+const APPROVE_CMD = `${hookCall('permission')} 2>/dev/null || true # ${HOOK_MARK}`;
 // 开发自测可以用 CLAWD_CC_SETTINGS 指向一个临时文件,避免动到真正的配置
 const ccSettingsFile = () => (!app.isPackaged && process.env.CLAWD_CC_SETTINGS) || path.join(os.homedir(), '.claude', 'settings.json');
 function readCC() {
@@ -113,11 +124,12 @@ function ccHookEvents() {   // 已经装了 Clawd hook 的事件
   catch { return []; }
 }
 const ccHooked = () => ccHookEvents().length > 0;
-// 旧版 hook 命令不带 App / tty / Claude App 会话 id(点小螃蟹没法跳转)或不限定 Claude Code,启动时换成新的
+// 和现在的命令不一样的(旧版、换了端口或 userData 位置),启动时换成新的
 function ccHooksStale() {
-  try { return cc.clawdHooksStale(readCC().hooks); }
+  try { return cc.clawdHooksStale(readCC().hooks, HOOK_CMD); }
   catch { return false; }
 }
+const ccApproveStale = () => { try { return cc.clawdHooksStale(readCC().hooks, APPROVE_CMD, ['PermissionRequest']); } catch { return false; } };
 const ccApproveOn = () => { try { return cc.hasClawdHook(readCC().hooks, 'PermissionRequest'); } catch { return false; } };
 // 改 Claude Code 配置:只动 Clawd 自己的那几条,别的原样保留;改之前先备份
 function editCC(fn) {
@@ -698,8 +710,10 @@ function createTray() {
 }
 
 app.whenReady().then(() => {
+  try { fs.writeFileSync(hookScriptFile(), HOOK_SCRIPT); } catch (e) { console.error('写 hook.sh 失败', e.message); }
   // 之前连过 Claude Code、但 hooks 是旧版(少几个事件):按用户原来的选择补齐
   try { const evs = ccHookEvents(); if (evs.length && (evs.length < HOOK_EVENTS.length || ccHooksStale())) setCCHooks(true); } catch (e) { console.error('升级 Claude Code hooks 失败', e.message); }
+  try { if (ccApproveStale()) editCCHooks(set => set('PermissionRequest', { command: APPROVE_CMD, timeout: 75 })); } catch (e) { console.error('升级批准权限 hook 失败', e.message); }
 
   if (process.platform === 'darwin' && app.dock) {
     if (showDock) app.dock.show(); else app.dock.hide();

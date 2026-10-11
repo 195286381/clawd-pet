@@ -3,9 +3,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const cc = require('../cc');
 
-const CMD = `[ "$CLAUDECODE" = 1 ] && curl ... -H "X-Clawd-Host: $CLAUDE_CODE_HOST_SESSION_ID" http://127.0.0.1:47615/hook # ${cc.HOOK_MARK}`;
-const OLD_CMD = `curl ... http://127.0.0.1:47615/hook # ${cc.HOOK_MARK}`;
-const NO_CC_CMD = `curl ... -H "X-Clawd-Host: $CLAUDE_CODE_HOST_SESSION_ID" http://127.0.0.1:47615/hook # ${cc.HOOK_MARK}`;   // 不限定 Claude Code 的旧版
+const CMD = `sh '/x/hook.sh' hook 47615 >/dev/null 2>&1 || true # ${cc.HOOK_MARK}`;
+const APPROVE = `sh '/x/hook.sh' permission 47615 2>/dev/null || true # ${cc.HOOK_MARK}`;
+const OLD_CMD = `[ "$CLAUDECODE" = 1 ] && curl ... http://127.0.0.1:47615/hook # ${cc.HOOK_MARK}`;   // 命令里带 $ 的旧版
 const other = { type: 'command', command: 'say done' };
 
 test('editHooks:装上 Clawd 的 hook,别的 hooks 和配置原样保留', () => {
@@ -15,7 +15,7 @@ test('editHooks:装上 Clawd 的 hook,别的 hooks 和配置原样保留', () =>
   assert.deepEqual(cfg.hooks.Custom, [{ hooks: [other] }]);
   assert.deepEqual(cfg.hooks.Stop, [{ matcher: '', hooks: [other] }, { hooks: [{ type: 'command', command: CMD, async: true, timeout: 5 }] }]);
   assert.deepEqual(cc.clawdHookEvents(cfg.hooks), cc.HOOK_EVENTS);
-  assert.equal(cc.clawdHooksStale(cfg.hooks), false);
+  assert.equal(cc.clawdHooksStale(cfg.hooks, CMD), false);
 });
 
 test('editHooks:重复装不会叠加,卸掉后只剩别人的,空了就删掉 hooks 字段', () => {
@@ -42,14 +42,16 @@ test('editHooks:和别人的 hook 在同一组里时只删 Clawd 那条', () => 
 });
 
 test('认出装了哪些、旧版命令、批准权限', () => {
-  const hooks = { Stop: [{ hooks: [{ command: OLD_CMD }] }], PreToolUse: [{ hooks: [other] }], PermissionRequest: [{ hooks: [{ command: CMD }] }] };
+  const hooks = { Stop: [{ hooks: [{ command: OLD_CMD }] }], PreToolUse: [{ hooks: [other] }], PermissionRequest: [{ hooks: [{ command: APPROVE }] }] };
   assert.deepEqual(cc.clawdHookEvents(hooks), ['Stop']);
-  assert.equal(cc.clawdHooksStale(hooks), true);
+  assert.equal(cc.clawdHooksStale(hooks, CMD), true);
+  assert.equal(cc.clawdHooksStale(hooks, APPROVE, ['PermissionRequest']), false);
+  assert.equal(cc.clawdHooksStale(hooks, APPROVE.replace('47615', '47616'), ['PermissionRequest']), true);   // 换了端口
   assert.equal(cc.hasClawdHook(hooks, 'PermissionRequest'), true);
   assert.equal(cc.hasClawdHook(hooks, 'PreToolUse'), false);
   assert.deepEqual(cc.clawdHookEvents(undefined), []);
-  assert.equal(cc.clawdHooksStale(null), false);
-  assert.equal(cc.clawdHooksStale({ Stop: [{ hooks: [{ command: NO_CC_CMD }] }] }), true);
+  assert.equal(cc.clawdHooksStale(null, CMD), false);
+  assert.equal(cc.clawdHooksStale({ Stop: [{ hooks: [{ command: CMD }] }], PreToolUse: [{ hooks: [other] }] }, CMD), false);
   assert.equal(cc.hasClawdHook(undefined, 'Stop'), false);
   assert.equal(cc.isClawdHook({ command: 42 }), false);
 });
